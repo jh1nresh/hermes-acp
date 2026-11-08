@@ -1,0 +1,306 @@
+name: Isolated ACP source and offline CLI verification
+on:
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: isolated-repair-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Verify frozen ACP source and run bounded offline checks
+        run: |
+          python3 -I - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import signal
+          import stat
+          import subprocess
+
+          IMAGE = 'node@sha256:9f0dde62d10e7ff7a310ecaebd66225f6b46c17e6cb778449a77b05d3541bea2'
+          PINS = {'.dockerignore': 'b26835e47cd90a0c1cae95a48c16aa675aeddc6261b4bc8b03ad177a4bdffa60', '.gitignore': '4981a732b9dc2971d56efb41119933a874f69f4ef699f502f8c84dc6adbd760b', '.husky/pre-commit': 'e2b7c9733375d7182af2033bda9a7d2a05d0db5eef5be53d26eb7b5f3df8fbc3', '.prettierignore': '7ddf9c6b952e098537a10e95beba650393c92f9232a055e92686cc8008620f13', '.prettierrc': '2bade21ff44753d7733c81e8825aeb9d1a8676a56dad9ade3893f8b71bfca7fd', 'AGENTS.md': 'c21357d36fdd22adebb53149ac7a2b2367a8c736445a1a004dfed80cb8801cf3', 'Dockerfile': 'c5d101a7b2ec5b0af09c9e991546049dbd47124380dfcbc265c6e2e72cd98d9f', 'README.md': 'b97cc31603db6b69f968b1d5e76defd381479a6bcda8a41324a2b12a6d1b931c', 'SKILL.md': '7dbac636d2a333095b5cd0c23f5badca1248df35017ffed0f52c2814981467cb', 'bin/acp.ts': 'b4c1ce858f959259096b94b77f4f312676fd855a5225348e670d8576a0ab3e5f', 'blink/app/api/flights/route.ts': 'ce2cee1ef1c85523c3593dbc5eea75924c523bbdc42e5cbcb6363b4eb3c89971', 'blink/app/api/flights/solana/route.ts': '30f866b3dc16f868ce4c5db86ce58af5a3f16ac77a626a6b5e56e1d64fc10bee', 'blink/app/layout.tsx': '235b0136480b0353b2cdfafad3158537702bc36f9843253cbcb55ef45631dab3', 'blink/app/page.tsx': 'b67faf36de74459f893e6b5a81cdc693a5b6a35b306b676d47015b537e75aad7', 'blink/lib/conferences.ts': 'bddbb03ef73ea56a6b8525b8d47518b8ab07b195f368d0396f0a7bd254e5c75f', 'blink/lib/hermes.ts': 'e5879507aafc03010f340ef5a2f1f1b1a36b87315da1a073f093d12b4a050c40', 'blink/lib/payment.ts': '426c8c2a4273e9b8f578a0865788da2b19734b7083d452dbab114d2da5777c12', 'blink/lib/solana-payment.ts': '42925dbe9e94ca249ec36a94aa0b6bb8797f4300ad9e00c8d94d7fa087bc1e65', 'blink/next-env.d.ts': 'f2b3bca04d1bfe583daae1e1f798c92ec24bb6693bd88d0a09ba6802dee362a8', 'blink/next.config.ts': 'b73687bb64cdd9706d78837868ccea33bf213d19d62556d59bf5aefdf4467a06', 'blink/package-lock.json': '545b5d0b4b96020486da0b5d9c2771c30f5fb60e161bc0f032cb10daf93f98c4', 'blink/package.json': 'a8abfe4c6809dd8cfc6e1f54f92315a3711dd4f65ff1adfc91aef81482b6962f', 'blink/tsconfig.json': '4183c9a6d3b55e54fa5b49f0e3195fcc5bc4c885521b74aee2fdd074711fdbf5', 'blink/vercel.json': '45e42d5b6247f1b673125eccf0c55967e743967e5647cd9069bb8fe35bfa3d81', 'package-lock.json': '8ae610bfbcdfe7cf1f23ba586de46b29344c26b2a8675220191c7096dd369a54', 'package.json': '278e1175ae76bb7bf1d604929778ac558b4ac87081b1c5cf23813b9854fe5842', 'railway.json': 'b072e2254582adb407997b9ccc318d6b89e0697c43220ba76822c32e3e1d18b9', 'references/acp-job.md': '7912ed60de1c6b3c4879c5ccf1b3887ab391902687b97375fdef74edb0e12d2c', 'references/agent-token.md': '7a73523d2914b9238254e2fb3d91ff6afadcb886d2a2587c9b9f490d7774f410', 'references/agent-wallet.md': '2115018be624d3667818a1a2da3db1b27c7b163a2150e2cc6a18b3b8e931dcf2', 'references/bounty.md': 'b49623fde91e99b7264217b5a2a89dc8f0e7743d7af6a081143320fa7402d3f4', 'references/crypto-conferences-2026.json': '713658db851d69cc3ad9c7ce4102ce50a4c0b33fc234084985afee3915806ab6', 'references/deploy.md': 'ffeb2e6a36a5621a2911987b7cc1ae532fb04ec62e0421104af9f58bc775eea0', 'references/seller.md': '40fcdf2bb326ac01e20641be97ad885ccb7a0a53f794b4419d674fc657508814', 'scripts/erc8004-agent-registration.json': 'a8605129ef7561dbaf5afaea459e0816da944a90a8c0f29ebbfb90be3a65af26', 'scripts/erc8004-register.ts': 'b386de3e84930c51b1e66b4b614e33aaa9923fd2adc9f746a413c3a34c6986a3', 'scripts/erc8004-set-wallet.ts': 'ec7d82e797c13e0ae0430f84aa5ba275ace0c69f868e9d1f82e8370869137840', 'scripts/erc8004-update-uri.ts': '00b04b7a007e9281f75acc768728fe3b8017a09ba5b3c1d769e97bf07ae35aa5', 'src/commands/agent.ts': 'a72e24957230ca454c1a206c1de2a6be66c6cbd58081a9bb4b5a08bf9041c637', 'src/commands/bounty.ts': 'd110e0f537d3e82c4a8f08600eb857b2493412af8fbd14a300fc817775ccd9bc', 'src/commands/browse.ts': '4884ab58a333848c19c6376763eb231b26a2199a0df543d67e638e0a4e3a5bff', 'src/commands/deploy.ts': 'f33aa6c0f24497799a7580fa5ebc7fa964f2a478a7b4e94c5d60587162662969', 'src/commands/job.ts': 'd64cecc018c420cd4a6bbaca755d8d409b5e60f29aa19e399a5f64baf3fee8fb', 'src/commands/profile.ts': 'e091c6717dd5249b3f89ddee637b01b1e0a03b60093d3474822c2cc9f24c9348', 'src/commands/resource.ts': 'd57af78ba35abb77ef747f90a348b0ed230c666ba2546b6b6b284465820cfaa7', 'src/commands/search.ts': '55fe404cec9c0df7e0a7256d49001332e06805e66621783b42f86a3e9d38cdce', 'src/commands/sell.ts': 'e29547f556ef8de131da18a90ac9f6bc0a498b7a1185ee097c97930eb98d478e', 'src/commands/serve.ts': '7f24a56af5be65dfa61b6e69cb956d4b81b6e03e55eb1e4514f05264088ccbfa', 'src/commands/setup.ts': 'a6131cdb28829349ce2481b4d7b3ed79ae495ccbb252cf3fd9064cdf1beed2f5', 'src/commands/token.ts': '586a6bfa565fb6e6e4846ef31e59e8c3cb23c3886d88294e9f5bd8de61bb14cc', 'src/commands/twitter.ts': '996e411700dee78560eaebf95f2a9d1071c156d82d8ee85c2d7ceaf465e71a3e', 'src/commands/wallet.ts': 'e47aa7e3ad5011fa0efc80af715978688680ecdac0f1ffb0a6489ed21f105907', 'src/deploy/docker.ts': '8db0e0decff3cb7cf18d03c915e5b9aa61b7788ba580d138584fa2133d8e9a02', 'src/deploy/railway.ts': '72016d414f0c98433e22d17adf66158c251cbc6b18c0247e6f327652f15f533f', 'src/lib/amadeus.ts': '4ff99bedfa590dba37a4dbe61451957cca66a799fe29f244b7bd002adf6cc6b7', 'src/lib/api.ts': '7ba2f86c6de335d458c673ce93612e3fc6e05c2eb38c6d355b83207e062f5b05', 'src/lib/auth.ts': '943b875b4c4563560259d0df224af2888e09c76204503e5ebc7aec44483b7875', 'src/lib/bounty.ts': 'd7bb8529c55f16aecd04115a25e32bbc74631e919b0fec022aee4a2c1b0418a1', 'src/lib/client.ts': '168a7f73e56e73e23903e0b84483237f106fdeb5fbfdda21105f341ebd672676', 'src/lib/conferenceSearch.ts': '52c64b3451ae854a5bcd6f378335832a5c754873156afc25173d14a31ed43a97', 'src/lib/conferences.ts': 'b40e6500f02e94588643335b13f2ef2375d396779cad90ec3c1dc97c929dff74', 'src/lib/config.ts': 'f46716935361aa38b6da10fa9ef1747a7cf627cf2edfd39d3b0e8c89f4e8ff62', 'src/lib/erc8004.ts': 'ed71595fc2990dfb90ec69cd475adbb84691f6b7cb5edfa40603fe95aad32de8', 'src/lib/open.ts': '2164486431e2263cb431b3bcb443e551f0f06be1e3a87b774b4008f5a6580bb6', 'src/lib/openclawCron.ts': '432b1b91684429e5b9cd40b0e8e9e4aa78b208d39503ac5e25876d59fc5f720e', 'src/lib/output.ts': 'c77bad6b517ac7942a6c9ea1754767485da4b80d08dcd806fb43837ea906c9b7', 'src/lib/priceHistory.ts': '9c98709b4b1799c60f65ef3fab7c7508ce633bb34cafe000bbaac88e0150162e', 'src/lib/twitterApi.ts': 'beb791b0bd4093f850e4123e71e8bcfa039066e45fd528b0f096d551ca8d6058', 'src/lib/usageLogger.ts': '10573ed469320394826645a37623429a03c801d627e222276b03fb2748bf6445', 'src/lib/wallet.ts': 'f852532e6a6678d7067a98895bb6e3a30f755b4161e13bb579034db48a21afa5', 'src/scripts/analyzeUsage.ts': 'db3cb220a02871ffcae2ee660f27aa035d9e05ee177131b74e592215b81b8f3f', 'src/scripts/execute-trust-swap.ts': 'b71d19d1062610eec03d46f50d03269250da1d68837be431b002064d3337a793', 'src/seller/offerings/hermes/conference_travel/handlers.ts': '9a65095a84891df51400d7dd3957f80ebfc5c649fd627a890f7ff8653fb3c7f1', 'src/seller/offerings/hermes/conference_travel/offering.json': '21947b097f089a212e0db9c608ccf50ded1cce314bf714c6a630f93d4edfce0a', 'src/seller/offerings/hermes/conference_trip/handlers.ts': 'b58e62a64ef293c1fd1890724819ce71ab5e5f20cfc75d5c59c91a72cccedc4b', 'src/seller/offerings/hermes/conference_trip/offering.json': '6de8cb01837f76eb4d6e7deb165127c02eeb6d954b84244efd20b113db4b60b2', 'src/seller/offerings/hermes/flight_research/handlers.ts': '92a4e3aa2ae0df9cccdac4086527a84a6f1d93ca1a8b5aaa8fb721c9b15dbefd', 'src/seller/offerings/hermes/flight_research/offering.json': 'cf95a18ff725518e35410cea96b34ac438ca4e9efa4adbae84b4eed09bd0eabc', 'src/seller/offerings/hermes/multi_conference_router/handlers.ts': 'e7379dbd084c125fe90e095e47b71cd4f04fd45962f6534c10d9afd335f0a22f', 'src/seller/offerings/hermes/multi_conference_router/offering.json': '6d1ac6a08442f7b58ef4890bb99e79b967d32618691809a04dde45bfffc73189', 'src/seller/offerings/hermes/trip_planner/handlers.ts': '5479b6df41789ff2a60a9c9328a7666e203bd3d8e275e4eaedaeae70790a59dc', 'src/seller/offerings/hermes/trip_planner/offering.json': '7afbac7f8e009031a8444bd86990c876070c19252ef58e14a2e54bd9da2705bb', 'src/seller/runtime/acpSocket.ts': 'e25afd1de071754e4c80c40f1ff7924d070d974018a9760c1d33493f75c6ca8e', 'src/seller/runtime/offeringTypes.ts': 'c1120fb85e52abd6689997c0e2d2a2349be5dc4d014bfe0e2505e7ff12b41375', 'src/seller/runtime/offerings.ts': '960b608e167f12ac9f9bd29d46f1f19ce80dfcef1999b4e42b140721f51ad050', 'src/seller/runtime/seller.ts': 'cd61ac678f50eef7c9e13ee0d5cf79da43063784deb993c09d377255a78926ac', 'src/seller/runtime/sellerApi.ts': 'bb700b799b4641c653d5eed5d4acf293b8f6f0c910f7e9fa682df3ac433b76cc', 'src/seller/runtime/types.ts': 'c1207a1b2cbe18d0138718e18c4dc2f004cb59dc0a11d4f59b7ec7a50792e712', 'test-bounty.sh': '1891d6887fcc1d412c8b1c7291e9cf6fc8cf0b676fed95ea73af6ce5db6b09eb', 'test-cli.sh': 'f6f26a44867226a6b66976612eb7cfa0438393f857850fd33a20bbce7ebef68f', 'test-local.ts': 'b6eaa7b576a8e1d49635eab3a3f54d143826f98c28360695b4083070909e6108', 'tsconfig.json': '0a774d500e36b9cf7853ddb7dc79e0a5f3695609ea9b0e96f369b6d29e1c1a70', 'twitter-bot/package-lock.json': 'a547f8586b22a0000822d7e6914c8c155a4675da5fef565a8c5b2435f6697ba2', 'twitter-bot/package.json': '8dd768d4fa454cf04831457fb6995a9d0ee08bd924746e94f9abe95543e22cf3', 'twitter-bot/src/bot.ts': '79224a238e31bbd4041c45f6763983e5d3034156145db27e21f8b67f7fb92e60', 'twitter-bot/src/conferences.ts': '234a8f2e4b8febfe5191678610589b1a866a9570b403ab800b21ba9825a576ff', 'twitter-bot/src/rate-limit.ts': 'af4bcde1a9cb32e81147611fe25697b8d5e9cb31f16801ae59ef53a4d8ed1337', 'twitter-bot/src/twitter.ts': 'a81d1ad12e69e24d711fba4b38848de1ca9d6eebed3c0297f92a7b7c50eef62f', 'twitter-bot/tsconfig.json': '68a9d67c4df31729f0def8ab590d5bbe99359c4bbb35054becbf0085c6655397', '.github/scripts/check-ci-boundary.cjs': '7d1807681088a313d1695338fb38683833624ccf1a208d4ea73ec5c7e8fc6a52'}
+          EXCLUDED = {'.git', '.env', '.npmrc', '.yarnrc', '.yarnrc.yml', '.vercel',
+                      '.ssh', '.aws', '.rentproof', '.next', 'node_modules', 'target',
+                      '.config', '.cache', '.npm', '.local', '.pnpm-store', '.yarn', 'config.json', 'logs'}
+          KEY_SUFFIXES = ('.pem', '.key', '.p12', '.pfx', '.keystore')
+          MARKER = b"global.o='" + b"5-852-" + b"du';"
+          APP_COMMAND = 'node .github/scripts/check-ci-boundary.cjs && node --input-type=commonjs -e "$1" "$2" "$3"'
+          CHECK_PROGRAM = '\nconst fs = require(\'node:fs\');\nconst crypto = require(\'node:crypto\');\nconst {spawnSync} = require(\'node:child_process\');\nconst pins = JSON.parse(process.argv[1]);\nfor (const [relative, expected] of Object.entries(pins)) {\n  if (crypto.createHash(\'sha256\').update(fs.readFileSync(\'/work/\' + relative)).digest(\'hex\') !== expected)\n    throw Error(\'Post-install frozen source drift: \' + relative);\n}\nfs.mkdirSync(process.env.HOME, {recursive:true, mode:0o700});\n// Preserve the application\'s formatter coverage. Only the two added CI files and\n// this temporary ignore file are excluded; no original application path is added.\nconst ignore = fs.readFileSync(\'/work/.prettierignore\', \'utf8\');\nconst ignorePath = \'/work/.incident-prettierignore\';\nfs.writeFileSync(ignorePath, ignore + \'\\n/.github/workflows/isolated-repair.yml\\n/.github/scripts/check-ci-boundary.cjs\\n/.incident-prettierignore\\n\', {flag:\'wx\',mode:0o600});\nconst node = process.execPath;\nconst expectedVersion = \'0.1.0\';\nconst parseProgram = `const fs=require(\'node:fs\');const ts=require(\'typescript\');const files=JSON.parse(process.argv[1]);for(const p of files){const s=ts.createSourceFile(p,fs.readFileSync(p,\'utf8\'),ts.ScriptTarget.Latest,true,ts.ScriptKind.TS);if(s.parseDiagnostics.length){for(const d of s.parseDiagnostics)console.error(p+\': \'+ts.flattenDiagnosticMessageText(d.messageText,\'\\\\n\'));process.exitCode=1;}}`;\nconst changedScripts = JSON.parse(process.argv[2]);\nconst checks = [\n  {name:\'changed operational scripts parse only\', file:node, args:[\'--input-type=commonjs\',\'-e\',parseProgram,JSON.stringify(changedScripts)], timeout:30000},\n  {name:\'installed project typecheck\', file:node, args:[\'node_modules/typescript/bin/tsc\',\'--noEmit\',\'--project\',\'tsconfig.json\'], timeout:180000},\n  {name:\'existing application formatter check\', file:\'npm\', args:[\'--ignore-scripts\',\'run\',\'format:check\',\'--\',\'--ignore-path\',\'.gitignore\',\'--ignore-path\',\'.incident-prettierignore\'], timeout:120000},\n  {name:\'exact offline CLI help\', file:node, args:[\'--import\',\'tsx\',\'bin/acp.ts\',\'--help\'], timeout:20000, smoke:\'help\'},\n  {name:\'exact offline CLI version\', file:node, args:[\'--import\',\'tsx\',\'bin/acp.ts\',\'--version\'], timeout:20000, smoke:\'version\'},\n];\nlet failed = false;\ntry {\n  for (const check of checks) {\n    const result = spawnSync(check.file,check.args,{cwd:\'/work\',env:process.env,encoding:\'utf8\',timeout:check.timeout,maxBuffer:check.smoke?65536:1048576,killSignal:\'SIGKILL\',shell:false});\n    const output=result.stdout||\'\', error=result.stderr||\'\';\n    let ok=!result.error && result.status===0 && !result.signal;\n    if(check.smoke===\'version\') ok=ok && output.trim()===expectedVersion;\n    if(check.smoke===\'help\') ok=ok && [\'Agent Commerce Protocol CLI\',\'Usage:\',\'--help, -h\',\'--version, -v\'].every(x=>output.includes(x));\n    console.log(\'Scoped check:\',check.name,\'status:\',result.status,\'signal:\',result.signal||\'none\',\'passed:\',ok);\n    if(output)process.stdout.write(output);if(error)process.stderr.write(error);\n    if(result.error)console.error(String(result.error.message).slice(0,2000));\n    if(!ok)failed=true;\n  }\n} finally {\n  fs.unlinkSync(ignorePath);\n}\n\n// Capture is data only; all original check outcomes and the red gate remain.\nconst captureProgram = "\'use strict\';\\nconst fs = require(\'node:fs\');\\nconst crypto = require(\'node:crypto\');\\nconst zlib = require(\'node:zlib\');\\nconst SOURCE_HEAD = \'b9bfac6253f1d8b07787bd732be604246700aba9\';\\nconst CONFIG_SHA = \'2bade21ff44753d7733c81e8825aeb9d1a8676a56dad9ade3893f8b71bfca7fd\';\\nconst OPTIONS = Object.freeze({semi:true,singleQuote:false,tabWidth:2,trailingComma:\'es5\',printWidth:100});\\nconst EXPECTED = Object.freeze([{\\"path\\":\\"blink/next.config.ts\\",\\"size\\":591,\\"sha256\\":\\"b73687bb64cdd9706d78837868ccea33bf213d19d62556d59bf5aefdf4467a06\\"},{\\"path\\":\\"scripts/erc8004-register.ts\\",\\"size\\":7556,\\"sha256\\":\\"b386de3e84930c51b1e66b4b614e33aaa9923fd2adc9f746a413c3a34c6986a3\\"},{\\"path\\":\\"scripts/erc8004-set-wallet.ts\\",\\"size\\":4813,\\"sha256\\":\\"ec7d82e797c13e0ae0430f84aa5ba275ace0c69f868e9d1f82e8370869137840\\"},{\\"path\\":\\"scripts/erc8004-update-uri.ts\\",\\"size\\":1832,\\"sha256\\":\\"00b04b7a007e9281f75acc768728fe3b8017a09ba5b3c1d769e97bf07ae35aa5\\"},{\\"path\\":\\"src/commands/browse.ts\\",\\"size\\":3703,\\"sha256\\":\\"4884ab58a333848c19c6376763eb231b26a2199a0df543d67e638e0a4e3a5bff\\"},{\\"path\\":\\"src/lib/erc8004.ts\\",\\"size\\":8009,\\"sha256\\":\\"ed71595fc2990dfb90ec69cd475adbb84691f6b7cb5edfa40603fe95aad32de8\\"},{\\"path\\":\\"src/scripts/analyzeUsage.ts\\",\\"size\\":7369,\\"sha256\\":\\"db3cb220a02871ffcae2ee660f27aa035d9e05ee177131b74e592215b81b8f3f\\"},{\\"path\\":\\"src/scripts/execute-trust-swap.ts\\",\\"size\\":6256,\\"sha256\\":\\"b71d19d1062610eec03d46f50d03269250da1d68837be431b002064d3337a793\\"},{\\"path\\":\\"src/seller/runtime/seller.ts\\",\\"size\\":8184,\\"sha256\\":\\"cd61ac678f50eef7c9e13ee0d5cf79da43063784deb993c09d377255a78926ac\\"},{\\"path\\":\\"test-local.ts\\",\\"size\\":1163,\\"sha256\\":\\"b6eaa7b576a8e1d49635eab3a3f54d143826f98c28360695b4083070909e6108\\"},{\\"path\\":\\"twitter-bot/src/bot.ts\\",\\"size\\":3844,\\"sha256\\":\\"79224a238e31bbd4041c45f6763983e5d3034156145db27e21f8b67f7fb92e60\\"}].map(x=>Object.freeze(x)));\\nconst MAX_FILE=65536, MAX_TOTAL=262144, MAX_JSON=1048576, MAX_GZIP=393216, CHUNK=4096, MAX_CHUNKS=128;\\nfunction fail(code){const error=new Error(code);error.captureCode=code;throw error;}\\nfunction need(ok,code){if(!ok)fail(code);}\\nconst hash = data => crypto.createHash(\'sha256\').update(data).digest(\'hex\');\\n\\n\\nfunction semanticDiagnostic(ts,path,before,after){\\n  const left=JSON.parse(before),right=JSON.parse(after);\\n  const snapshot=value=>{\\n    const raw=Buffer.from(JSON.stringify(value===undefined?null:value));\\n    return {sha256:hash(raw),bytes:raw.length,preview_base64:raw.subarray(0,96).toString(\'base64\'),preview_truncated:raw.length>96};\\n  };\\n  const first=(a,b,kindOnly=false)=>{\\n    for(let i=0;i<Math.max(a.length,b.length);i++){\\n      const x=a[i],y=b[i];\\n      const different=kindOnly?x?.[1]!==y?.[1]:JSON.stringify(x)!==JSON.stringify(y);\\n      if(different)return {index:i,before:snapshot(x),after:snapshot(y),\\n        ...(kindOnly?{before_kind:String(ts.SyntaxKind[x?.[1]]??x?.[1]).slice(0,80),after_kind:String(ts.SyntaxKind[y?.[1]]??y?.[1]).slice(0,80)}:{})};\\n    }\\n    return null;\\n  };\\n  const record={schema:\'hermes-semantic-diagnostic-v1\',source_head:SOURCE_HEAD,path,\\n    tools:{node:\'22.23.4\',prettier:\'3.8.1\',typescript:\'5.9.3\'},\\n    before_sha256:hash(before),after_sha256:hash(after),\\n    before_entries:left.entries.length,after_entries:right.entries.length,\\n    before_comments:left.comments.length,after_comments:right.comments.length,\\n    first_entry:first(left.entries,right.entries),first_kind:first(left.entries,right.entries,true),\\n    first_comment:first(left.comments,right.comments),candidate_approval:false,semantic_pass:false};\\n  const raw=Buffer.from(JSON.stringify(record));\\n  need(raw.length<=2500,\'DIAGNOSTIC_BOUND\');\\n  console.error(\'HERMES_SEMANTIC_DIAGNOSTIC_V1 sha256=\'+hash(raw)+\' bytes=\'+raw.length+\' data=\'+raw.toString(\'base64\'));\\n}\\n\\nfunction semantic(ts,path,text){\\n  const source=ts.createSourceFile(path,text,ts.ScriptTarget.Latest,false,ts.ScriptKind.TS);\\n  need(Array.isArray(source.parseDiagnostics)&&source.parseDiagnostics.length===0,\'PARSE_DIAGNOSTIC\');\\n  const entries=[],leaves=[],stack=[{node:source,path:\'0\',depth:0,owner:null}];let nodes=0,removedWrappers=0;\\n  while(stack.length){\\n    let {node,path:at,depth,owner}=stack.pop();\\n    need(depth<=128&&++nodes<=30000&&Number.isInteger(node.kind)&&Number.isInteger(node.flags),\'AST_BOUND\');\\n    // Only the observed formatter shape, not general parenthesis/type erasure.\\n    if(node.kind===ts.SyntaxKind.ParenthesizedExpression&&owner?.kind===ts.SyntaxKind.ArrowFunction&&\\n       owner.body===node&&node.expression?.kind===ts.SyntaxKind.ConditionalExpression){\\n      const allowed=[\'pos\',\'end\',\'kind\',\'id\',\'flags\',\'modifierFlagsCache\',\'transformFlags\',\'parent\',\'original\',\'emitNode\',\'expression\',\'jsDoc\',\'flowNode\'];\\n      need(Object.keys(node).every(key=>allowed.includes(key))&&node.flags===0&&node.id===0&&\\n        node.modifierFlagsCache===0&&node.transformFlags===0&&node.parent===undefined&&\\n        node.original===undefined&&node.emitNode===undefined&&node.flowNode===undefined&&\\n        (node.jsDoc===undefined||(Array.isArray(node.jsDoc)&&node.jsDoc.length===0)),\'ARROW_PAREN_SHAPE\');\\n      const inner=[];ts.forEachChild(node,child=>{need(inner.length<2,\'ARROW_PAREN_SHAPE\');inner.push(child);});\\n      need(inner.length===1&&inner[0]===node.expression,\'ARROW_PAREN_SHAPE\');\\n      const start=node.getStart(source,false),end=node.end,childStart=node.expression.getStart(source,false);\\n      need(Number.isInteger(start)&&Number.isInteger(end)&&Number.isInteger(childStart)&&\\n        start>=0&&end<=text.length&&end>start+2&&text[start]===\'(\'&&text[end-1]===\')\'&&\\n        childStart>start&&node.expression.end<end,\'ARROW_PAREN_SPAN\');\\n      need(++nodes<=30000&&++depth<=128,\'AST_BOUND\');removedWrappers++;\\n      node=node.expression;\\n      need(Number.isInteger(node.kind)&&Number.isInteger(node.flags),\'AST_BOUND\');\\n    }\\n    const children=[];ts.forEachChild(node,child=>{need(children.length<30000,\'AST_BOUND\');children.push(child);});\\n    // forEachChild omits scalar syntax (unary operator/type-only/import phase).\\n    // Retain every own primitive, excluding only source positions, whole-file\\n    // source text and the parser\'s quote/line-layout preferences. Unknown\\n    // primitive fields therefore fail closed on any changed value.\\n    const fields=[];\\n    for(const key of Object.keys(node).sort()){\\n      if([\'pos\',\'end\',\'singleQuote\',\'multiLine\'].includes(key)||(node===source&&key===\'text\'))continue;\\n      const value=node[key],type=typeof value;\\n      if(value!==null&&![\'undefined\',\'boolean\',\'number\',\'string\'].includes(type))continue;\\n      need(fields.length<256&&key.length<=128,\'AST_FIELD_BOUND\');\\n      need(type!==\'number\'||Number.isFinite(value),\'AST_FIELD_BOUND\');\\n      need(type!==\'string\'||Buffer.byteLength(value)<=MAX_FILE,\'AST_FIELD_BOUND\');\\n      fields.push([key,type,value===undefined?null:value]);\\n    }\\n    const entry=[at,node.kind,node.flags,fields];\\n    // Escaped strings can have the same cooked text but differ as directives:\\n    // \'\\\\x75se strict\' is not the Use Strict Directive. Preserve interior raw\\n    // spelling in every initial string-expression sequence, allowing only\\n    // equivalent surrounding single/double quote changes.\\n    if(Array.isArray(node.statements)){\\n      const directives=[];\\n      for(const statement of node.statements){\\n        if(statement.kind!==ts.SyntaxKind.ExpressionStatement||statement.expression?.kind!==ts.SyntaxKind.StringLiteral)break;\\n        const expression=statement.expression,start=expression.getStart(source,false),end=expression.end;\\n        need(Number.isInteger(start)&&Number.isInteger(end)&&start>=0&&end>start+1&&end<=text.length,\'DIRECTIVE_SPAN\');\\n        const raw=text.slice(start,end);need((raw[0]===\'\\\\\\"\'||raw[0]===\\"\'\\")&&raw.at(-1)===raw[0],\'DIRECTIVE_SPAN\');\\n        directives.push(raw.slice(1,-1));need(directives.length<=2000,\'DIRECTIVE_BOUND\');\\n      }\\n      entry.push([\'raw-directives\',directives]);\\n    }\\n    if(!children.length){\\n      const start=node.getStart(source,false),end=node.end;\\n      need(Number.isInteger(start)&&Number.isInteger(end)&&0<=start&&start<=end&&end<=text.length,\'AST_SPAN\');\\n      let value;\\n      if(typeof node.text===\'string\')value=node.text;\\n      else if(typeof node.escapedText===\'string\')value=node.escapedText;\\n      else value=text.slice(start,end);\\n      need(typeof value===\'string\'&&Buffer.byteLength(value)<=MAX_FILE,\'LEAF_BOUND\');\\n      entry.push(value);\\n      if(typeof node.rawText===\'string\'){\\n        need(Buffer.byteLength(node.rawText)<=MAX_FILE,\'LEAF_BOUND\');entry.push([\'raw-template\',node.rawText]);\\n      }\\n      leaves.push({start,end,path:at});\\n    }\\n    entries.push(entry);\\n    need(stack.length+children.length<=30000,\'AST_BOUND\');\\n    for(let i=children.length-1;i>=0;i--)stack.push({node:children[i],path:at+\'.\'+i,depth:depth+1,owner:node});\\n  }\\n  if(removedWrappers){\\n    need(Number.isInteger(source.nodeCount)&&source.nodeCount>=removedWrappers&&source.nodeCount<=100000,\'ARROW_PAREN_COUNTER\');\\n    const field=entries[0][3].find(row=>row[0]===\'nodeCount\');\\n    need(field&&field[1]===\'number\'&&field[2]===source.nodeCount,\'ARROW_PAREN_COUNTER\');\\n    field[2]-=removedWrappers;\\n  }\\n  const byStart=leaves.slice().sort((a,b)=>a.start-b.start),byEnd=leaves.slice().sort((a,b)=>a.end-b.end);\\n  const scanner=ts.createScanner(ts.ScriptTarget.Latest,false,ts.LanguageVariant.Standard,text);\\n  const comments=[];let previous=-1,tokens=0;\\n  while(true){\\n    const kind=scanner.scan();if(kind===ts.SyntaxKind.EndOfFileToken)break;\\n    const start=scanner.getTokenPos(),end=scanner.getTextPos();\\n    need(++tokens<=100000&&Number.isInteger(kind)&&Number.isInteger(start)&&Number.isInteger(end)&&start>=0&&end>start&&end>previous&&end<=text.length,\'SCAN_BOUND\');\\n    previous=end;\\n    if(![ts.SyntaxKind.SingleLineCommentTrivia,ts.SyntaxKind.MultiLineCommentTrivia,ts.SyntaxKind.ShebangTrivia].includes(kind))continue;\\n    need(comments.length<2000,\'COMMENT_BOUND\');\\n    const raw=text.slice(start,end),normalized=raw.replace(/\\\\r\\\\n/g,\'\\\\n\').split(\'\\\\n\').map(x=>x.trim()).join(\'\\\\n\');\\n    let lo=0,hi=byStart.length;\\n    while(lo<hi){const mid=(lo+hi)>>1;if(byStart[mid].start<end)lo=mid+1;else hi=mid;}\\n    const next=lo<byStart.length?byStart[lo].path:null;\\n    lo=0;hi=byEnd.length;\\n    while(lo<hi){const mid=(lo+hi)>>1;if(byEnd[mid].end<=start)lo=mid+1;else hi=mid;}\\n    const prior=lo>0?byEnd[lo-1].path:null;\\n    const record=[kind,normalized,prior,next];\\n    if(/eslint-disable-next-line|@ts-(?:ignore|expect-error)|prettier-ignore/.test(raw)){\\n      record.push([\'next-physical-line\',text.slice(end).replace(/\\\\r\\\\n/g,\'\\\\n\').split(\'\\\\n\')[1]?.trim()??\'\']);\\n    }\\n    comments.push(record);\\n  }\\n  const signature=JSON.stringify({entries,comments});need(Buffer.byteLength(signature)<=2*MAX_JSON,\'SIGNATURE_BOUND\');\\n  return signature;\\n}\\n\\nfunction readFrozen(io,relative,expected,max){\\n  const path=\'/work/\'+relative;\\n  need(io.fs.realpathSync(path)===path&&Number.isInteger(io.fs.constants.O_NOFOLLOW)&&io.fs.constants.O_NOFOLLOW>0,\'SOURCE_PATH\');\\n  const fd=io.fs.openSync(path,io.fs.constants.O_RDONLY|io.fs.constants.O_NOFOLLOW);\\n  try{\\n    const stat=io.fs.fstatSync(fd);\\n    need(stat.isFile()&&stat.uid===1000&&(stat.mode&0o777)===0o644&&stat.size===expected.size&&stat.size<=max,\'SOURCE_SHAPE\');\\n    const data=io.fs.readFileSync(fd);\\n    need(Buffer.isBuffer(data)&&data.length===stat.size&&hash(data)===expected.sha256,\'SOURCE_HASH\');\\n    const text=data.toString(\'utf8\');need(Buffer.from(text,\'utf8\').equals(data),\'SOURCE_UTF8\');\\n    return {data,text};\\n  }finally{io.fs.closeSync(fd);}\\n}\\n\\nasync function capture(io){\\n  need(io.uid===1000&&io.node===\'22.23.4\'&&io.prettier.version===\'3.8.1\'&&io.ts.version===\'5.9.3\',\'TOOL_IDENTITY\');\\n  const config=readFrozen(io,\'.prettierrc\',{size:107,sha256:CONFIG_SHA},4096);\\n  const options=JSON.parse(config.text);\\n  need(JSON.stringify(Object.keys(options).sort())===JSON.stringify(Object.keys(OPTIONS).sort())&&\\n       Object.keys(OPTIONS).every(k=>options[k]===OPTIONS[k]),\'CONFIG_OPTIONS\');\\n  const files=[];let total=0;\\n  for(const item of EXPECTED){\\n    try{\\n    const old=readFrozen(io,item.path,{size:item.size,sha256:item.sha256},MAX_FILE);\\n    const output=await io.prettier.format(old.text,{...options,parser:\'typescript\',plugins:[]});\\n    need(typeof output===\'string\',\'FORMAT_RESULT\');\\n    const bytes=Buffer.from(output,\'utf8\');\\n    need(bytes.toString(\'utf8\')===output,\'FORMAT_UTF8\');\\n    need(bytes.length>0&&bytes.length<=MAX_FILE&&(total+=bytes.length)<=MAX_TOTAL,\'FORMAT_BOUND\');\\n    need(hash(bytes)!==item.sha256,\'FORMAT_UNCHANGED\');\\n    const beforeSignature=semantic(io.ts,item.path,old.text),afterSignature=semantic(io.ts,item.path,output);\\n    if(beforeSignature!==afterSignature){\\n      semanticDiagnostic(io.ts,item.path,beforeSignature,afterSignature);\\n      fail(\'SEMANTIC_DRIFT\');\\n    }\\n    files.push({path:item.path,mode:\'100644\',old_sha256:item.sha256,old_bytes:old.data.length,\\n                sha256:hash(bytes),bytes:bytes.length,content_base64:bytes.toString(\'base64\')});\\n    }catch(error){if(error&&typeof error===\'object\')error.capturePath=item.path;throw error;}\\n  }\\n  need(files.length===11,\'ALLOWLIST_COUNT\');\\n  const nonce=io.nonce();need(typeof nonce===\'string\'&&/^[0-9a-f]{32}$/.test(nonce),\'NONCE\');\\n  const record={schema:\'hermes-acp-format-candidates-v1\',nonce,source_head:SOURCE_HEAD,\\n    tools:{node:io.node,prettier:io.prettier.version,typescript:io.ts.version},\\n    config:{path:\'.prettierrc\',sha256:CONFIG_SHA,options},total_bytes:total,files};\\n  const raw=Buffer.from(JSON.stringify(record));need(raw.length<MAX_JSON,\'JSON_BOUND\');\\n  const compressed=zlib.gzipSync(raw,{level:9,mtime:0});need(compressed.length<=MAX_GZIP,\'GZIP_BOUND\');\\n  const encoded=compressed.toString(\'base64\'),chunks=Math.ceil(encoded.length/CHUNK),id=hash(raw);\\n  need(chunks>=1&&chunks<=MAX_CHUNKS,\'CHUNK_BOUND\');\\n  const lines=[`HERMES_FORMAT_V1_BEGIN id=${id} raw_bytes=${raw.length} gzip_bytes=${compressed.length} gzip_sha256=${hash(compressed)} chunks=${chunks}`];\\n  for(let i=0;i<chunks;i++)lines.push(`HERMES_FORMAT_V1_CHUNK id=${id} index=${i+1} data=${encoded.slice(i*CHUNK,(i+1)*CHUNK)}`);\\n  lines.push(`HERMES_FORMAT_V1_END id=${id} chunks=${chunks}`);\\n  return lines.join(\'\\\\n\')+\'\\\\n\';\\n}\\n\\nasync function main(){\\n  const prettier=require(\'/work/node_modules/prettier/index.cjs\');\\n  const ts=require(\'/work/node_modules/typescript/lib/typescript.js\');\\n  const frame=await capture({fs,prettier,ts,uid:process.getuid(),node:process.versions.node,\\n                            nonce:()=>crypto.randomBytes(16).toString(\'hex\')});\\n  await new Promise((resolve,reject)=>process.stdout.write(frame,error=>error?reject(error):resolve()));\\n}\\nmodule.exports={capture,semantic,readFrozen,EXPECTED,CONFIG_SHA,OPTIONS,SOURCE_HEAD};\\nif(require.main===module||process.argv[1]===\'hermes-acp-format-capture-v1\'){\\n  main().catch(error=>{const value=error&&typeof error===\'object\'?error:{};\\n    const code=typeof value.captureCode===\'string\'&&/^[A-Z_]{1,64}$/.test(value.captureCode)?value.captureCode:\'TOOL_FAILURE\';\\n    const target=EXPECTED.some(x=>x.path===value.capturePath)?\' path=\'+value.capturePath:\'\';\\n    console.error(\'HERMES_FORMAT_CAPTURE_REJECTED \'+code+target);process.exitCode=1;});\\n}\\n";\nconst captureResult=spawnSync(node,[\'--input-type=commonjs\',\'-e\',captureProgram,\'--\',\'hermes-acp-format-capture-v1\'],{\n  cwd:\'/work\',env:process.env,encoding:\'utf8\',timeout:45000,maxBuffer:1048576,killSignal:\'SIGKILL\',shell:false});\nconst captureOK=!captureResult.error&&captureResult.status===0&&!captureResult.signal;\nconsole.log(\'Bounded format candidate capture status:\',captureResult.status,\'signal:\',captureResult.signal||\'none\',\'passed:\',captureOK);\nif(captureOK){\n  if(!captureResult.stdout||!captureResult.stdout.startsWith(\'HERMES_FORMAT_V1_BEGIN \'))throw Error(\'Format capture frame missing\');\n  process.stdout.write(captureResult.stdout);\n}else{\n  failed=true;\n  if(captureResult.stderr)process.stderr.write(captureResult.stderr.slice(0,4096));\n}\nif(failed)throw Error(\'One or more required ACP checks failed; bounded outcomes collected\');\nconsole.log(\'ACP parse/type/format/help/version passed; no live command or operational script was evaluated\');\n'
+          OPERATIONAL_SCRIPTS = ['scripts/erc8004-register.ts', 'scripts/erc8004-set-wallet.ts', 'scripts/erc8004-update-uri.ts']
+
+          def require(condition, message):
+              if not condition:
+                  raise RuntimeError(message)
+
+          def excluded(name):
+              lower = name.lower()
+              return (lower in EXCLUDED or lower.startswith('.env') or
+                      lower.startswith('id_rsa') or lower.startswith('id_ed25519') or
+                      lower.endswith(KEY_SUFFIXES) or
+                      (lower.endswith('.json') and any(x in lower for x in ('keypair', 'wallet', 'payer', 'secret'))))
+
+          def executable_marker(data):
+              # A small lexical filter for this incident's appended JS statements.
+              # Skip quoted/comment fixture text; template interpolation is not parsed.
+              # This targets known appended statements, not arbitrary JS malware.
+              i = 0
+              while i < len(data):
+                  if data.startswith(b'//', i):
+                      end = data.find(b'\n', i + 2)
+                      i = len(data) if end < 0 else end + 1
+                  elif data.startswith(b'/*', i):
+                      end = data.find(b'*/', i + 2)
+                      i = len(data) if end < 0 else end + 2
+                  elif data[i] in (34, 39, 96):
+                      quote = data[i]
+                      i += 1
+                      while i < len(data):
+                          if data[i] == 92:
+                              i += 2
+                          elif data[i] == quote:
+                              i += 1
+                              break
+                          else:
+                              i += 1
+                  elif data.startswith(MARKER, i) or data.startswith(b'eval("' + MARKER + b'"+atob(', i):
+                      return True
+                  else:
+                      i += 1
+              return False
+
+          def validate_source(root):
+              require(root.is_dir() and root != Path('/'), 'Invalid source root')
+              total = 0
+              for directory, dirs, files in os.walk(root, followlinks=False):
+                  dirs[:] = [name for name in dirs if not excluded(name)]
+                  for name in dirs + files:
+                      if excluded(name):
+                          continue
+                      path = Path(directory) / name
+                      mode = path.lstat().st_mode
+                      require(not stat.S_ISLNK(mode), 'Symlink source rejected: ' + str(path.relative_to(root)))
+                      if name in dirs:
+                          require(stat.S_ISDIR(mode), 'Non-directory source ancestor')
+                          continue
+                      require(stat.S_ISREG(mode), 'Nonregular source rejected')
+                      size = path.stat().st_size
+                      require(size <= 64 * 1024 * 1024, 'Oversized source file')
+                      total += size
+                      require(total <= 512 * 1024 * 1024, 'Source copy exceeds bound')
+                      if path.suffix.lower() in {'.js', '.cjs', '.mjs', '.jsx', '.ts', '.tsx', '.mts', '.cts'}:
+                          require(not executable_marker(path.read_bytes()),
+                                  'Executable incident loader in ' + str(path.relative_to(root)))
+              for relative, expected in PINS.items():
+                  path = root / relative
+                  require(path.is_file() and not path.is_symlink(), 'Missing frozen CI input: ' + relative)
+                  require(hashlib.sha256(path.read_bytes()).hexdigest() == expected,
+                          'Frozen CI input drift: ' + relative)
+              print('Source-as-data incident predicate and complete filtered ACP source hashes passed', flush=True)
+
+          COPY_PROGRAM = r'''
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const crypto = require('node:crypto');
+          const pins = JSON.parse(process.argv[1]);
+          const excluded = new Set(['.git','.env','.npmrc','.yarnrc','.yarnrc.yml','.vercel','.ssh','.aws','.rentproof','.next','node_modules','target','.config','.cache','.npm','.local','.pnpm-store','.yarn','config.json','logs']);
+          function skip(name) {
+            const n = name.toLowerCase();
+            return excluded.has(n) || n.startsWith('.env') || n.startsWith('id_rsa') || n.startsWith('id_ed25519') ||
+              /\.(pem|key|p12|pfx|keystore)$/.test(n) || (/\.json$/.test(n) && /(keypair|wallet|payer|secret)/.test(n));
+          }
+          let total = 0;
+          function own(p) { fs.chownSync(p,1000,1000); }
+          function copy(src,dst) {
+            const s = fs.lstatSync(src);
+            if (s.isSymbolicLink()) throw Error('Symlink in source copy');
+            if (s.isDirectory()) {
+              fs.mkdirSync(dst,{recursive:true});
+              for (const name of fs.readdirSync(src)) if (!skip(name)) copy(path.join(src,name),path.join(dst,name));
+              own(dst);
+            } else if (s.isFile()) {
+              total += s.size;
+              if (s.size > 64*1024*1024 || total > 512*1024*1024) throw Error('Source copy exceeds bound');
+              fs.writeFileSync(dst,fs.readFileSync(src),{flag:'wx',mode:s.mode & 0o777});
+              fs.chmodSync(dst,s.mode & 0o777); own(dst);
+            } else throw Error('Nonregular source copy');
+          }
+          copy('/source','/work');
+          for (const [relative, expected] of Object.entries(pins)) {
+            const file = path.join('/work',relative);
+            if (!fs.lstatSync(file).isFile() || fs.lstatSync(file).isSymbolicLink()) throw Error('Invalid frozen input');
+            if (crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== expected)
+              throw Error('Copied frozen input hash drift');
+          }
+          console.log('Filtered source copied into the single owned work volume; all frozen inputs verified');
+          '''
+
+          class Docker:
+              def __init__(self, root, label):
+                  self.root, self.label = root, label
+                  self.prefix = 'hermes-acp-incident-' + label
+                  self.volumes = [self.prefix + '-work']
+                  self.names = {stage: self.prefix + '-' + stage for stage in ('init', 'install', 'app-check')}
+                  self.intents = {}
+                  self.creation_attempted = False
+
+              def call(self, *args, capture=False, timeout=90):
+                  result = subprocess.run(args, check=True, text=True, timeout=timeout,
+                                          stdout=subprocess.PIPE if capture else None)
+                  return result.stdout.strip() if capture else None
+
+              def lookup(self, kind, name):
+                  if kind == 'container':
+                      rows = self.call('docker','container','ls','-aq','--no-trunc','--filter',
+                                       'name=^/' + re.escape(name) + '$', capture=True).splitlines()
+                      if not rows:
+                          return None
+                      require(len(rows) == 1, 'Ambiguous container identity')
+                      items = json.loads(self.call('docker','container','inspect',rows[0],capture=True))
+                      require(len(items) == 1 and items[0]['Name'] == '/' + name, 'Container name mismatch')
+                  else:
+                      rows = self.call('docker','volume','ls','--format','{{.Name}}','--filter','name=' + name,
+                                       capture=True).splitlines()
+                      if name not in rows:
+                          return None
+                      items = json.loads(self.call('docker','volume','inspect',name,capture=True))
+                      require(len(items) == 1 and items[0]['Name'] == name, 'Volume name mismatch')
+                  return items[0]
+
+              def owned(self, kind, item):
+                  labels = item.get('Labels', {}) if kind == 'volume' else item['Config'].get('Labels', {})
+                  require((labels or {}).get('codex.incident.run') == self.label, 'Resource ownership label mismatch')
+
+              def preflight(self):
+                  for kind, names in [('volume', self.volumes), ('container', self.names.values())]:
+                      for name in names:
+                          require(self.lookup(kind, name) is None, 'Refusing preexisting resource name')
+
+              def volume(self, name):
+                  self.intents[('volume',name)] = True  # Uncertain BEFORE the mutating call.
+                  self.creation_attempted = True
+                  actual = self.call('docker','volume','create','--label','codex.incident.run=' + self.label,
+                                     name,capture=True)
+                  require(actual == name, 'Volume creation identity mismatch')
+                  item = self.lookup('volume',name)
+                  require(item is not None, 'Created volume not visible')
+                  self.owned('volume',item)
+                  self.intents[('volume',name)] = False
+
+              def container(self, stage, options, command, timeout, report_exit=False):
+                  name = self.names[stage]
+                  self.intents[('container',name)] = True  # Record uncertain creation first.
+                  self.creation_attempted = True
+                  self.call('docker','create','--name',name,'--label','codex.incident.run=' + self.label,
+                            *options,IMAGE,*command,capture=True)
+                  item = self.lookup('container',name)
+                  require(item is not None, 'Created container not visible')
+                  self.owned('container',item)
+                  self.intents[('container',name)] = False
+                  start_error = None
+                  try:
+                      self.call('docker','start','--attach',name,timeout=timeout)
+                  except subprocess.CalledProcessError as error:
+                      start_error = error
+                  item = self.lookup('container',name)
+                  require(item is not None, 'Container outcome missing')
+                  self.owned('container',item)
+                  require(not item['State']['Running'] and item['State']['Status'] == 'exited',
+                          'Container remained active or did not establish an exited outcome')
+                  exit_code = item['State']['ExitCode']
+                  if start_error is not None and exit_code == 0:
+                      raise start_error  # A CLI/API failure is not a successful container outcome.
+                  require(report_exit or exit_code == 0, 'Container check failed')
+                  self.call('docker','rm',item['Id'])
+                  require(self.lookup('container',name) is None, 'Removed container remains')
+                  del self.intents[('container',name)]
+                  return exit_code
+
+              def cleanup(self):
+                  errors = []
+                  for kind in ('container','volume'):
+                      for (resource_kind,name), uncertain in list(reversed(self.intents.items())):
+                          if resource_kind != kind:
+                              continue
+                          try:
+                              item = self.lookup(kind,name)
+                              if item is None:
+                                  require(not uncertain, 'Creation outcome unverified for ' + name)
+                              else:
+                                  self.owned(kind,item)
+                                  if kind == 'container':
+                                      if item['State']['Running']:
+                                          self.call('docker','stop','--time','10',item['Id'],timeout=30)
+                                          stopped = self.lookup(kind,name)
+                                          require(stopped is not None, 'Stopped container identity missing')
+                                          self.owned(kind,stopped)
+                                          require(stopped['Id'] == item['Id'] and not stopped['State']['Running'],
+                                                  'Owned container still running or replaced')
+                                      self.call('docker','rm',item['Id'])
+                                  else:
+                                      self.call('docker','volume','rm',name)
+                                  require(self.lookup(kind,name) is None, 'Resource remains after removal')
+                              del self.intents[(kind,name)]
+                          except BaseException as error:
+                              errors.append(kind + ':' + name + ':' + type(error).__name__ + ':' + str(error))
+                  return errors
+
+              def execute(self):
+                  self.preflight()
+                  self.call('docker','pull',IMAGE,timeout=180)
+                  for name in self.volumes:
+                      self.volume(name)
+                  work, = self.volumes
+                  common = ['--read-only','--cap-drop','ALL','--security-opt','no-new-privileges',
+                            '--pids-limit','256','--memory','3g','--cpus','2',
+                            '--tmpfs','/tmp:rw,nosuid,nodev,size=512m']
+                  env = ['--env','HOME=/tmp/hermes-acp-home','--env','CI=true','--env','NEXT_TELEMETRY_DISABLED=1',
+                         '--env','NPM_CONFIG_CACHE=/tmp/npm','--env','NPM_CONFIG_USERCONFIG=/dev/null',
+                         '--env','NPM_CONFIG_REGISTRY=https://registry.npmjs.org']
+                  self.container('init', [*common,'--network','none','--cap-add','CHOWN',
+                                 '--mount','type=bind,src=' + str(self.root) + ',dst=/source,readonly',
+                                 '--mount','type=volume,src=' + work + ',dst=/work'],
+                                 ['node','--input-type=commonjs','-e',COPY_PROGRAM,json.dumps(PINS)],90)
+                  unprivileged = [*common,'--user','1000:1000',*env]
+                  self.container('install', [*unprivileged,'--mount','type=volume,src=' + work + ',dst=/work',
+                                            '--workdir','/work'],
+                                 ['npm','ci','--ignore-scripts','--no-audit','--fund=false'],600)
+                  self.container('app-check', [*unprivileged,'--network','none','--mount',
+                                 'type=volume,src=' + work + ',dst=/work','--workdir','/work'],
+                                 ['sh','-ec',APP_COMMAND,'hermes-acp-scoped-checks',CHECK_PROGRAM,json.dumps(PINS),json.dumps(OPERATIONAL_SCRIPTS)],600)
+
+          def interrupted(signum, frame):
+              raise SystemExit(128 + signum)
+
+          def main():
+              signal.signal(signal.SIGTERM, interrupted)
+              run_id, attempt = os.environ['GITHUB_RUN_ID'], os.environ['GITHUB_RUN_ATTEMPT']
+              require(re.fullmatch(r'[0-9]{1,20}',run_id) and re.fullmatch(r'[0-9]{1,6}',attempt), 'Invalid owner')
+              root = Path(os.environ['GITHUB_WORKSPACE']).resolve()
+              require('\n' not in str(root) and ',' not in str(root), 'Invalid bind source')
+              validate_source(root)
+              docker = Docker(root,run_id + '-' + attempt)
+              try:
+                  docker.execute()
+              finally:
+                  errors = docker.cleanup()
+                  if errors:
+                      raise RuntimeError('Owned CI closeout failed: ' + json.dumps(errors))
+                  if docker.creation_attempted:
+                      print('Owned containers and the work volume verified absent; CI closeout completed',flush=True)
+                  else:
+                      print('No container or volume creation was attempted; verified resource absence and closeout are not claimed',flush=True)
+              print('ACP parse/type/format/help/version verification passed; no wallet, seller, API, bounty or operational script ran',flush=True)
+
+          if __name__ == '__main__':
+              main()
+          PY
